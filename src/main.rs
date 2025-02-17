@@ -13,6 +13,8 @@ use std::process::Command;
 use tokio::fs::remove_dir_all;
 
 use clap_derive::Parser;
+use log::LevelFilter;
+use simple_logger::SimpleLogger;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -32,12 +34,19 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    SimpleLogger::new()
+        .with_level(LevelFilter::Debug)
+        .with_module_level("sqlx", LevelFilter::Warn)
+        .init()
+        .expect("Failed to init logger");
+
     // Parse command line arguments (or fallback to env variables)
     let args = Args::parse();
 
+    log::info!("Updating all projects...");
     // Ensure the database exists before processing
     if let Err(e) = db::create_database_if_not_exists(&args.db_url).await {
-        eprintln!("Failed to ensure database exists: {}", e);
+        log::error!("Failed to ensure database exists: {}", e);
         return;
     }
 
@@ -52,7 +61,7 @@ async fn process_all_projects(db_url: &str, svg_folder: &Path, temp_folder: &Pat
                 process_project(&project, svg_folder, temp_folder, db_url).await;
             }
         }
-        Err(e) => eprintln!("Failed to fetch projects: {}", e),
+        Err(e) => log::error!("Failed to fetch projects: {}", e),
     }
 }
 
@@ -62,6 +71,7 @@ pub async fn process_project(
     temp_folder: &Path,
     db_url: &str,
 ) {
+    log::trace!("Cloning project {}/{}", project.github_user, project.project_name);
     let repo_url = format!(
         "https://github.com/{}/{}.git",
         project.github_user, project.project_name
@@ -80,13 +90,14 @@ pub async fn process_project(
 
     // Clone the repository
     if let Err(e) = clone_repo(&repo_url, &project_path) {
-        eprintln!("Failed to clone repository: {}", e);
+        log::error!("Failed to clone repository: {}", e);
         return;
     }
 
     // Run CLOC on the cloned repository
     match run_cloc(&project_path, &ignored_dirs) {
         Ok(cloc_data) => {
+            log::trace!("Generating SVG file for {}/{}", project.github_user, project.project_name);
             // Generate svg
             if let Ok(svg) = svg::generate_svg(&project.title, &cloc_data) {
                 // Write to file
@@ -98,6 +109,7 @@ pub async fn process_project(
                 );
             }
 
+            log::trace!("Saving stats to database for {}/{}", project.github_user, project.project_name);
             // Save the project stats
             if let Err(e) = db::save_project_stats(
                 db_url,
@@ -107,18 +119,20 @@ pub async fn process_project(
             )
             .await
             {
-                eprintln!("Failed to save project stats: {}", e)
+                log::error!("Failed to save project: {}", e);
             }
         }
         Err(e) => {
-            eprintln!("Failed to run CLOC: {}", e);
+            log::error!("Failed to clone project: {}", e);
         }
     }
 
     // Clean up the temporary folder
     if let Err(e) = remove_dir_all(&project_path).await {
-        eprintln!("Failed to remove temp folder: {}", e);
+        log::error!("Failed to remove temp folder: {}", e);
     }
+
+    log::debug!("Processed project {}/{}", project.github_user, project.project_name);
 }
 
 pub fn clone_repo(repo_url: &str, dest_path: &Path) -> Result<(), git2::Error> {

@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT \"user\" AS \"github_user!\", project_name, title\n        FROM project\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "github_user!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "project_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2d356dfc97e0729d05826d11fea1041c7fd97199cc70101b1502315ff13caefb"
+}

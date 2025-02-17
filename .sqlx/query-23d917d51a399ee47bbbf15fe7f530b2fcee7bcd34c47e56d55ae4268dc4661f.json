@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        CREATE TABLE IF NOT EXISTS project_language_stat (\n            project_id INT REFERENCES project(id) ON DELETE CASCADE,\n            language VARCHAR NOT NULL,\n            files INT NOT NULL,\n            total_lines INT NOT NULL\n        );\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "23d917d51a399ee47bbbf15fe7f530b2fcee7bcd34c47e56d55ae4268dc4661f"
+}

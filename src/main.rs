@@ -3,38 +3,53 @@ mod model;
 mod svg;
 
 use crate::model::{ClocData, Project};
+
+use clap::Parser;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tokio::fs::remove_dir_all;
 
+use clap_derive::Parser;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// PostgreSQL Database URL: postgresql://user:password@host:port/database (or set DB_URL env variable)
+    #[arg(long, env = "DB_URL")]
+    db_url: String,
+
+    /// Path to the SVG folder (or set SVG_FOLDER env variable)
+    #[arg(long, env = "SVG_FOLDER")]
+    svg_folder: PathBuf,
+
+    /// Path to the temporary folder to store repositories (or set TEMP_FOLDER env variable)
+    #[arg(long, env = "TEMP_FOLDER")]
+    temp_folder: PathBuf,
+}
+
 #[tokio::main]
 async fn main() {
-    let temp_folder = Path::new("/Users/wesley/tmp/");
-    let svg_folder = Path::new("/Users/wesley/workspace/project-stats/assets/output/");
-    let db_url = "postgresql://pstatool:pstatool@127.0.0.1:5433/pstatool";
+    // Parse command line arguments (or fallback to env variables)
+    let args = Args::parse();
 
-    if let Err(e) = db::create_database_if_not_exists(db_url).await {
+    // Ensure the database exists before processing
+    if let Err(e) = db::create_database_if_not_exists(&args.db_url).await {
         eprintln!("Failed to ensure database exists: {}", e);
         return;
     }
 
-    process_all_projects(&db_url, svg_folder, temp_folder).await;
+    // Pass the values from the command line arguments
+    process_all_projects(&args.db_url, &args.svg_folder, &args.temp_folder).await;
 }
 
 async fn process_all_projects(db_url: &str, svg_folder: &Path, temp_folder: &Path) {
     match db::get_all_projects(db_url).await {
         Ok(projects) => {
             for project in projects {
-                process_project(
-                    &project,
-                    svg_folder,
-                    temp_folder,
-                    db_url,
-                )
-                .await;
+                process_project(&project, svg_folder, temp_folder, db_url).await;
             }
         }
         Err(e) => eprintln!("Failed to fetch projects: {}", e),
@@ -47,7 +62,10 @@ pub async fn process_project(
     temp_folder: &Path,
     db_url: &str,
 ) {
-    let repo_url = format!("https://github.com/{}/{}.git", project.github_user, project.project_name);
+    let repo_url = format!(
+        "https://github.com/{}/{}.git",
+        project.github_user, project.project_name
+    );
     let project_path = temp_folder.join(project.project_name.clone());
 
     // TODO Merge these with per-project dirs from the database
@@ -72,11 +90,23 @@ pub async fn process_project(
             // Generate svg
             if let Ok(svg) = svg::generate_svg(&project.title, &cloc_data) {
                 // Write to file
-                write_svg_to_output_dir(svg_folder, &project.github_user, &project.project_name, &svg);
+                write_svg_to_output_dir(
+                    svg_folder,
+                    &project.github_user,
+                    &project.project_name,
+                    &svg,
+                );
             }
 
             // Save the project stats
-            if let Err(e) = db::save_project_stats(db_url, &project.github_user, &project.project_name, &cloc_data).await {
+            if let Err(e) = db::save_project_stats(
+                db_url,
+                &project.github_user,
+                &project.project_name,
+                &cloc_data,
+            )
+            .await
+            {
                 eprintln!("Failed to save project stats: {}", e)
             }
         }
@@ -164,9 +194,9 @@ pub fn write_svg_to_output_dir(folder: &Path, user: &str, project_name: &str, co
 #[cfg(test)]
 mod tests {
     use crate::db::save_project_stats;
+    use crate::model::Project;
     use crate::{process_project, run_cloc};
     use std::path::Path;
-    use crate::model::Project;
 
     #[tokio::test]
     async fn test_project_generation() {
@@ -174,7 +204,7 @@ mod tests {
         let svg_folder = Path::new("/Users/wesley/workspace/project-stats/assets/output/");
         let db = "postgresql://pstatool:pstatool@127.0.0.1:5433/pstatool";
 
-        let project = Project{
+        let project = Project {
             github_user: "wdudokvanheel".to_string(),
             project_name: "babycare".to_string(),
             title: "Baby Care".to_string(),

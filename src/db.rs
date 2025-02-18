@@ -9,8 +9,10 @@ pub async fn create_database_if_not_exists(db_url: &str) -> Result<(), Error> {
         CREATE TABLE IF NOT EXISTS project (
             id SERIAL PRIMARY KEY,
             "user" VARCHAR NOT NULL,
-            project_name VARCHAR NOT NULL UNIQUE,
-            title VARCHAR NOT NULL UNIQUE
+            project_name VARCHAR NOT NULL,
+            title VARCHAR NOT NULL,
+            ignored_dirs VARCHAR NULL,
+            ignored_langs VARCHAR NULL
         );
         "#
     )
@@ -108,7 +110,7 @@ pub async fn get_all_projects(db_url: &str) -> Result<Vec<Project>, Error> {
     let projects = sqlx::query_as!(
         Project,
         r#"
-        SELECT "user" AS "github_user!", project_name, title
+        SELECT "user" AS "github_user!", project_name, title, ignored_dirs, ignored_langs
         FROM project
         "#
     )

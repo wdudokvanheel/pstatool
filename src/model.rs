@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClocHeader {
@@ -39,9 +40,18 @@ pub struct Project {
     pub github_user: String,
     pub project_name: String,
     pub title: String,
+    pub ignored_dirs: Option<String>,
+    pub ignored_langs: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Language {
     pub color: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct ClocConfig {
+    pub path: PathBuf,
+    pub ignored_langs: Vec<String>,
+    pub ignored_dirs: Vec<String>,
 }

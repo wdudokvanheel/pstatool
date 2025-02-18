@@ -141,6 +141,7 @@ mod tests {
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::path::Path;
+    use crate::model::ClocConfig;
     use crate::run_cloc;
     use crate::svg::{generate_svg, load_language_colors};
 
@@ -166,7 +167,12 @@ mod tests {
         ];
 
         let dest = Path::new("/Users/wesley/workspace/chip8/");
-        let result = run_cloc(dest, &ignored).unwrap();
+        let config = ClocConfig{
+            path: dest.to_path_buf(),
+            ignored_langs: vec![],
+            ignored_dirs: vec![],
+        };
+        let result = run_cloc(config).unwrap();
 
         let svg = generate_svg("SleepStream", &result);
         assert!(svg.is_ok());

@@ -2,9 +2,9 @@ mod db;
 mod model;
 mod svg;
 
-use crate::model::{ClocData, Project};
+use crate::model::{ClocConfig, ClocData, Project};
 
-use clap::Parser;
+use clap::{arg, Parser};
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -58,10 +58,47 @@ async fn process_all_projects(db_url: &str, svg_folder: &Path, temp_folder: &Pat
     match db::get_all_projects(db_url).await {
         Ok(projects) => {
             for project in projects {
-                process_project(&project, svg_folder, temp_folder, db_url).await;
+                process_project(&project, svg_folder, temp_folder, Some(db_url)).await;
             }
         }
         Err(e) => log::error!("Failed to fetch projects: {}", e),
+    }
+}
+
+pub fn create_cloc_config(project: &Project, path: &Path) -> ClocConfig {
+    let mut ignored_dirs: Vec<String> = vec!["target", ".idea", ".git", ".build"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+    let mut ignored_langs: Vec<String> = vec![
+        "JSON",
+        "Markdown",
+        "Maven",
+        "Properties",
+        "SVG",
+        "TOML",
+        "XML",
+        "YAML",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+
+    if let Some(proj_dirs) = project.ignored_dirs.as_ref() {
+        ignored_dirs.extend(proj_dirs.split(',').map(|s| s.trim().to_string()));
+    }
+    ignored_dirs.dedup();
+
+    if let Some(proj_langs) = project.ignored_langs.as_ref() {
+        ignored_langs.extend(proj_langs.split(',').map(|s| s.trim().to_string()));
+    }
+    ignored_langs.dedup();
+
+    ClocConfig {
+        path: path.to_path_buf(),
+        ignored_langs,
+        ignored_dirs,
     }
 }
 
@@ -69,24 +106,18 @@ pub async fn process_project(
     project: &Project,
     svg_folder: &Path,
     temp_folder: &Path,
-    db_url: &str,
+    db_url: Option<&str>,
 ) {
-    log::trace!("Cloning project {}/{}", project.github_user, project.project_name);
+    log::trace!(
+        "Cloning project {}/{}",
+        project.github_user,
+        project.project_name
+    );
     let repo_url = format!(
         "https://github.com/{}/{}.git",
         project.github_user, project.project_name
     );
     let project_path = temp_folder.join(project.project_name.clone());
-
-    // TODO Merge these with per-project dirs from the database
-    let ignored_dirs = [
-        "target",
-        ".idea",
-        "*.framework",
-        "*.xcodeproj",
-        "assets",
-        "pkg",
-    ];
 
     // Clone the repository
     if let Err(e) = clone_repo(&repo_url, &project_path) {
@@ -94,10 +125,17 @@ pub async fn process_project(
         return;
     }
 
+    let config = create_cloc_config(project, &project_path);
+
     // Run CLOC on the cloned repository
-    match run_cloc(&project_path, &ignored_dirs) {
+    match run_cloc(config) {
         Ok(cloc_data) => {
-            log::trace!("Generating SVG file for {}/{}", project.github_user, project.project_name);
+            log::trace!(
+                "Generating SVG file for {}/{}",
+                project.github_user,
+                project.project_name
+            );
+
             // Generate svg
             if let Ok(svg) = svg::generate_svg(&project.title, &cloc_data) {
                 // Write to file
@@ -109,17 +147,24 @@ pub async fn process_project(
                 );
             }
 
-            log::trace!("Saving stats to database for {}/{}", project.github_user, project.project_name);
-            // Save the project stats
-            if let Err(e) = db::save_project_stats(
-                db_url,
-                &project.github_user,
-                &project.project_name,
-                &cloc_data,
-            )
-            .await
-            {
-                log::error!("Failed to save project: {}", e);
+            // Save the project stats if an url is set
+            if let Some(db_url) = db_url {
+                log::trace!(
+                    "Saving stats to database for {}/{}",
+                    project.github_user,
+                    project.project_name
+                );
+
+                if let Err(e) = db::save_project_stats(
+                    db_url,
+                    &project.github_user,
+                    &project.project_name,
+                    &cloc_data,
+                )
+                .await
+                {
+                    log::error!("Failed to save project to database: {}", e);
+                }
             }
         }
         Err(e) => {
@@ -132,7 +177,11 @@ pub async fn process_project(
         log::error!("Failed to remove temp folder: {}", e);
     }
 
-    log::debug!("Processed project {}/{}", project.github_user, project.project_name);
+    log::debug!(
+        "Processed project {}/{}",
+        project.github_user,
+        project.project_name
+    );
 }
 
 pub fn clone_repo(repo_url: &str, dest_path: &Path) -> Result<(), git2::Error> {
@@ -158,17 +207,27 @@ pub fn clone_repo(repo_url: &str, dest_path: &Path) -> Result<(), git2::Error> {
     Ok(())
 }
 
-pub fn run_cloc(
-    repo_path: &Path,
-    ignored_dirs: &[&str],
-) -> Result<ClocData, Box<dyn std::error::Error>> {
-    let exclude_dirs = ignored_dirs.join(",");
+pub fn run_cloc(config: ClocConfig) -> Result<ClocData, Box<dyn std::error::Error>> {
+    log::trace!("Running cloc with configuration: {:?}", config);
+    let ignored_dirs = config.ignored_dirs.join(",");
+    let ignored_langs = config.ignored_langs.join(",");
 
-    let output = Command::new("cloc")
-        .arg("--json")
-        .arg(format!("--exclude-dir={}", exclude_dirs))
+    let mut command = Command::new("cloc");
+
+    let mut args = command.arg("--json");
+
+    if ignored_langs.len() > 0 {
+        args = args.arg(format!("--exclude-lang={}", ignored_langs))
+    }
+
+    if ignored_dirs.len() > 0 {
+        args = args.arg(format!("--exclude-dir={}", ignored_dirs))
+    }
+
+    let output = args
         .arg(
-            repo_path
+            config
+                .path
                 .to_str()
                 .ok_or_else(|| "Invalid repository path".to_string())?,
         )
@@ -208,8 +267,10 @@ pub fn write_svg_to_output_dir(folder: &Path, user: &str, project_name: &str, co
 #[cfg(test)]
 mod tests {
     use crate::db::save_project_stats;
-    use crate::model::Project;
-    use crate::{process_project, run_cloc};
+    use crate::model::{ClocConfig, Project};
+    use crate::{create_cloc_config, process_project, run_cloc};
+    use log::LevelFilter;
+    use simple_logger::SimpleLogger;
     use std::path::Path;
 
     #[tokio::test]
@@ -222,13 +283,37 @@ mod tests {
             github_user: "wdudokvanheel".to_string(),
             project_name: "babycare".to_string(),
             title: "Baby Care".to_string(),
+            ignored_dirs: None,
+            ignored_langs: None,
         };
 
-        process_project(&project, svg_folder, temp_folder, &db).await;
+        process_project(&project, svg_folder, temp_folder, Some(db)).await;
     }
 
     #[tokio::test]
-    async fn test_run_cloc_and_save() {
+    async fn test_process() {
+        setup_test_logger();
+
+        let temp_folder = Path::new("/Users/wesley/tmp/");
+        let svg = Path::new("./assets/output/");
+        let project_folder = Path::new("/Users/wesley/workspace/babycare/");
+        let project = Project {
+            github_user: "wdudokvanheel".to_string(),
+            project_name: "chip8".to_string(),
+            title: "Chip 8 Emu".to_string(),
+            ignored_dirs: Some("BabyCare.xcodeproj,Assets.xcassets".to_string()),
+            ignored_langs: Some("Lua".to_string()),
+        };
+        let config = create_cloc_config(&project, project_folder);
+
+        let cloc_data = run_cloc(config);
+        assert!(cloc_data.is_ok());
+        let cloc_data = cloc_data.unwrap();
+        println!("{}", serde_json::to_string_pretty(&cloc_data).unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_manual_process() {
         let dest = Path::new("/Users/wesley/workspace/babycare/");
         let url = "postgresql://pstatool:pstatool@127.0.0.1:5433/pstatool";
 
@@ -240,12 +325,73 @@ mod tests {
             "assets",
             "pkg",
         ];
-        let result = run_cloc(dest, &ignored).unwrap();
+
+        let config = ClocConfig {
+            path: dest.to_path_buf(),
+            ignored_langs: vec![],
+            ignored_dirs: vec![],
+        };
+
+        let result = run_cloc(config).unwrap();
 
         println!("{}", serde_json::to_string_pretty(&result).unwrap());
 
         save_project_stats(url, "wdudokvanheel", "baby-care", &result)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_run_cloc() {
+        setup_test_logger();
+        let dest = Path::new("/Users/wesley/workspace/babycare/");
+        let url = "postgresql://pstatool:pstatool@127.0.0.1:5433/pstatool";
+
+        let ignored = ["target", ".idea"];
+
+        let config = ClocConfig {
+            path: dest.to_path_buf(),
+            ignored_langs: vec!["TOML".to_string()],
+            ignored_dirs: ignored.iter().map(|s| s.to_string()).collect(),
+        };
+
+        let result = run_cloc(config);
+        assert!(result.is_ok());
+
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result.unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_cloc_config_gen() {
+        let dest = Path::new("/Users/wesley/workspace/babycare/");
+        let project = Project {
+            github_user: "wdudokvanheel".to_string(),
+            project_name: "chip8".to_string(),
+            title: "Chip 8 Emu".to_string(),
+            ignored_dirs: Some("testa,testb".to_string()),
+            ignored_langs: Some("Swift,Rust".to_string()),
+        };
+        let config = create_cloc_config(&project, dest);
+
+        assert!(config.ignored_langs.contains(&"Properties".to_string()));
+        assert!(config.ignored_langs.contains(&"TOML".to_string()));
+        assert!(config.ignored_langs.contains(&"Swift".to_string()));
+        assert!(config.ignored_langs.contains(&"Rust".to_string()));
+        assert!(!config.ignored_langs.contains(&"HTML".to_string()));
+
+        assert!(config.ignored_dirs.contains(&"testa".to_string()));
+        assert!(config.ignored_dirs.contains(&"testb".to_string()));
+        assert!(!config.ignored_dirs.contains(&"testc".to_string()));
+    }
+
+    fn setup_test_logger() {
+        SimpleLogger::new()
+            .with_level(LevelFilter::Trace)
+            .with_module_level("sqlx", LevelFilter::Warn)
+            .init()
+            .expect("Failed to init logger");
     }
 }

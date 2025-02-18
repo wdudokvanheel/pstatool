@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        CREATE TABLE IF NOT EXISTS project (\n            id SERIAL PRIMARY KEY,\n            \"user\" VARCHAR NOT NULL,\n            project_name VARCHAR NOT NULL,\n            title VARCHAR NOT NULL,\n            ignored_dirs VARCHAR NULL,\n            ignored_langs VARCHAR NULL\n        );\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "3412760f53b118237ff06c54d2e1dd8be5a2f19c6c2cd959cc6fa351c1bfedbe"
+}

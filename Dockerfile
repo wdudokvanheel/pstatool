@@ -14,6 +14,9 @@ FROM nginx:stable
 RUN apt-get update && apt-get install -y cloc && rm -rf /var/lib/apt/lists/
 COPY --from=builder /app/target/release/pstatool /usr/local/bin/pstatool
 
+RUN printf 'expires 6h;\nadd_header Cache-Control "public, max-age=21600, must-revalidate";\n' \
+      > /etc/nginx/conf.d/cache-control.conf
+
 EXPOSE 80
 
 RUN mkdir /tmp/pstatool
